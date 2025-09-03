@@ -115,9 +115,9 @@ def generate_images(prompt: str, style: str, aspect_ratio: str, num_variants: in
     return results
 
 
-def transform_image(prompt, image, strength=0.8, steps=30, cfg_scale=7, samples=1):
+def transform_image(prompt, image: Image.Image, strength=0.8, steps=30, cfg_scale=7, samples=1):
     """
-    Transform an uploaded image using Stability AI Image-to-Image API
+    Transform an image using Stability AI Image-to-Image API
     """
     api_key = st.secrets.get("STABILITY_API_KEY", "")
     if not api_key:
@@ -125,19 +125,23 @@ def transform_image(prompt, image, strength=0.8, steps=30, cfg_scale=7, samples=
         return []
 
     api_host = "https://api.stability.ai"
-    engine_id = "stable-diffusion-xl-1024-v1-0"  # you can switch to another engine
+    engine_id = "stable-diffusion-xl-1024-v1-0"
 
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
 
-    # Convert to PNG buffer
+    # ✅ Ensure it's really a PIL Image
+    if not isinstance(image, Image.Image):
+        st.error("Uploaded image could not be processed. Please upload a valid PNG/JPG.")
+        return []
+
+    # Convert PIL image into a buffer
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     buffered.seek(0)
 
-    # API request
     response = requests.post(
         f"{api_host}/v1/generation/{engine_id}/image-to-image",
         headers=headers,
@@ -168,20 +172,22 @@ def transform_image(prompt, image, strength=0.8, steps=30, cfg_scale=7, samples=
     return images
 
 
-# -------------------------------
-# 🔹 Streamlit Transformation Tab
-# -------------------------------
 def transformation_tab():
     st.subheader("🔄 Image Transformation")
 
     uploaded_file = st.file_uploader("📤 Upload an image", type=["png", "jpg", "jpeg"])
 
     if uploaded_file:
-        # ✅ Convert uploaded file into PIL Image
-        image = Image.open(uploaded_file).convert("RGB")
+        # ✅ Always convert file to PIL Image
+        try:
+            image = Image.open(uploaded_file).convert("RGB")
+        except Exception:
+            st.error("Could not read uploaded file as image.")
+            return
+
         st.image(image, caption="Original Image", use_container_width=True)
 
-        prompt = st.text_area("✏️ Transformation Prompt", placeholder="Describe how to transform your image...")
+        prompt = st.text_area("✏️ Transformation Prompt", placeholder="Describe the transformation...")
         strength = st.slider("🎚️ Strength", 0.1, 1.0, 0.8)
 
         if st.button("⚡ Transform Image", type="primary", disabled=not prompt):
@@ -198,7 +204,6 @@ def transformation_tab():
                         f"transformed_{i+1}.png",
                         "image/png"
                     )
-
 
 def upscale_image(uploaded_image: Image.Image) -> Image.Image:
     api_key = get_api_key()
