@@ -114,39 +114,56 @@ def generate_images(prompt: str, style: str, aspect_ratio: str, num_variants: in
     return results
 
 
-def transform_image(uploaded_image: Image.Image, prompt: str, style: str, strength: float = 0.7) -> Image.Image:
-    api_key = get_api_key()
-    enhanced_prompt = enhance_prompt(prompt, style)
+def transform_image(prompt, image, strength=0.8, steps=30, cfg_scale=7, samples=1):
+    """
+    Transform an image using Stability AI Image-to-Image API
+    """
+    api_key = st.secrets.get("STABILITY_API_KEY", "")
+    if not api_key:
+        st.error("Missing Stability API key. Please add it to Streamlit secrets.")
+        return []
 
-    # Convert PIL to bytes
-    img_byte_arr = io.BytesIO()
-    uploaded_image.save(img_byte_arr, format='PNG')
-    img_byte_arr.seek(0)
+    api_host = "https://api.stability.ai"
+    engine_id = "stable-diffusion-xl-1024-v1-0"  # you can change engine here
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Accept": "image/*"
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}"
     }
 
-    files = {"image": ("image.png", img_byte_arr, "image/png")}
-    data = {
-        "prompt": enhanced_prompt,
-        "output_format": "png",
-        "strength": strength
-    }
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    buffered.seek(0)
 
     response = requests.post(
-        "https://api.stability.ai/v2beta/stable-image/generate/image-to-image",
+        f"{api_host}/v1/generation/{engine_id}/image-to-image",
         headers=headers,
-        files=files,
-        data=data,
+        files={
+            "init_image": buffered
+        },
+        data={
+            "image_strength": strength,
+            "init_image_mode": "IMAGE_STRENGTH",
+            "text_prompts[0][text]": prompt,
+            "cfg_scale": cfg_scale,
+            "samples": samples,
+            "steps": steps,
+        },
         timeout=60
     )
 
-    if response.status_code == 200:
-        return Image.open(io.BytesIO(response.content))
-    else:
-        raise Exception(response.text)
+    if response.status_code != 200:
+        st.error(f"❌ Transformation failed: {response.text}")
+        return []
+
+    data = response.json()
+    images = []
+    for artifact in data.get("artifacts", []):
+        img_data = base64.b64decode(artifact["base64"])
+        images.append(Image.open(io.BytesIO(img_data)))
+
+    return images
+
 
 
 def upscale_image(uploaded_image: Image.Image) -> Image.Image:
