@@ -1,6 +1,10 @@
 """Main Streamlit application for AI Image Generator"""
 
 import streamlit as st
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from modules.image_generator import StabilityImageGenerator
 from modules.config import STYLE_PRESETS, ASPECT_RATIOS, QUICK_TEMPLATES
 import io
