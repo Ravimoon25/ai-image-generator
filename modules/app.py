@@ -1,136 +1,139 @@
-"""Main Streamlit application for AI Image Generator"""
+"""AI Image Generator - Single File Version"""
 
 import streamlit as st
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from modules.image_generator import StabilityImageGenerator
-from modules.config import STYLE_PRESETS, ASPECT_RATIOS, QUICK_TEMPLATES
+import requests
+from PIL import Image
 import io
 from datetime import datetime
+from typing import List, Tuple
 
 # Page configuration
 st.set_page_config(
     page_title="AI Image Generator",
     page_icon="🎨",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-def initialize_session_state():
-    """Initialize session state variables"""
-    if 'generation_history' not in st.session_state:
-        st.session_state.generation_history = []
-    if 'total_cost' not in st.session_state:
-        st.session_state.total_cost = 0.0
+# Configuration constants
+STYLE_PRESETS = {
+    "None": "",
+    "Photorealistic": "ultra-realistic, high-definition, professional photography, sharp details",
+    "Digital Art": "digital painting, concept art, detailed illustration, vibrant colors",
+    "Cartoon Style": "cartoon, animated style, colorful and fun, playful",
+    "Oil Painting": "classical oil painting, artistic brushstrokes, textured canvas"
+}
 
-def create_download_button(image, filename, key):
-    """Create download button for image"""
-    buf = io.BytesIO()
-    image.save(buf, format='PNG')
-    buf.seek(0)
-    return st.download_button(
-        f"📥 Download {filename}",
-        buf.getvalue(),
-        f"{filename}.png",
-        "image/png",
-        key=key
+ASPECT_RATIOS = {
+    "Square (1:1)": "1:1",
+    "Portrait (9:16)": "9:16", 
+    "Landscape (16:9)": "16:9"
+}
+
+QUICK_TEMPLATES = [
+    "Professional headshot, business attire, confident expression, office background",
+    "Corporate executive portrait, formal suit, leadership pose, modern office",
+    "Creative professional, artistic background, innovative pose, studio setting",
+    "LinkedIn profile photo, professional clothing, approachable smile, neutral background"
+]
+
+def generate_image(prompt: str, style: str, aspect_ratio: str) -> Image.Image:
+    """Generate image using Stability AI"""
+    api_key = st.secrets.get("STABILITY_API_KEY", "")
+    
+    if not api_key:
+        raise ValueError("API key not configured")
+    
+    # Enhance prompt
+    enhanced_prompt = prompt
+    if style != "None" and style in STYLE_PRESETS:
+        enhanced_prompt = f"{prompt}, {STYLE_PRESETS[style]}"
+    enhanced_prompt = f"{enhanced_prompt}, high quality, detailed, professional"
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "image/*"
+    }
+    
+    data = {
+        "prompt": enhanced_prompt,
+        "aspect_ratio": ASPECT_RATIOS[aspect_ratio],
+        "output_format": "png"
+    }
+    
+    response = requests.post(
+        "https://api.stability.ai/v2beta/stable-image/generate/core",
+        headers=headers,
+        files={"none": ""},
+        data=data,
+        timeout=60
     )
+    
+    if response.status_code == 200:
+        return Image.open(io.BytesIO(response.content))
+    else:
+        raise Exception(f"API Error: {response.text}")
 
 def main():
-    # Initialize
-    initialize_session_state()
-    generator = StabilityImageGenerator()
-    
-    # Header
     st.title("🎨 AI Image Generator")
-    st.markdown("**Professional image generation powered by Stability AI**")
+    st.markdown("Professional image generation powered by Stability AI")
     
-    # Sidebar
-    with st.sidebar:
-        st.header("📊 Dashboard")
-        
-        if not generator.check_api_key():
-            st.error("⚠️ Please add your Stability AI API key to secrets")
-            st.code('STABILITY_API_KEY = "your-key-here"')
-            st.stop()
-        else:
-            st.success("✅ Stability AI Connected")
-        
-        st.metric("Session Cost", f"${st.session_state.total_cost:.3f}")
-        st.metric("Images Generated", len(st.session_state.generation_history))
+    # Check API key
+    if not st.secrets.get("STABILITY_API_KEY"):
+        st.error("Please add STABILITY_API_KEY to your Streamlit secrets")
+        st.stop()
+    else:
+        st.success("✅ Stability AI Connected")
     
-    # Main content
+    # Main interface
     col1, col2 = st.columns([2, 1])
     
     with col1:
         prompt = st.text_area(
-            "✨ Describe your image:",
+            "Describe your image:",
             height=100,
-            placeholder="Professional headshot of a confident businesswoman in modern office"
+            placeholder="Professional headshot of a confident businesswoman"
         )
         
-        # Settings
         col1a, col1b = st.columns(2)
         with col1a:
             style = st.selectbox("Style:", list(STYLE_PRESETS.keys()))
-            num_variants = st.slider("Variants:", 1, 4, 2)
-        
         with col1b:
             aspect_ratio = st.selectbox("Aspect Ratio:", list(ASPECT_RATIOS.keys()))
         
-        # Cost estimation
-        estimated_cost = num_variants * 0.04
-        st.info(f"💰 Estimated cost: ${estimated_cost:.2f} for {num_variants} images")
+        st.info("💰 Cost: $0.04 per image")
         
-        # Generate button
-        if st.button("🎨 Generate Images", type="primary", disabled=not prompt):
+        if st.button("🎨 Generate Image", type="primary", disabled=not prompt):
             try:
                 with st.spinner("Generating..."):
-                    images, cost = generator.generate_multiple(prompt, num_variants, style, aspect_ratio)
+                    image = generate_image(prompt, style, aspect_ratio)
                 
-                if images:
-                    st.success(f"✅ Generated {len(images)} images for ${cost:.3f}")
-                    
-                    # Display images
-                    if len(images) == 1:
-                        st.image(images[0], use_column_width=True)
-                        create_download_button(images[0], "generated_image", "download_0")
-                    else:
-                        cols = st.columns(len(images))
-                        for i, img in enumerate(images):
-                            with cols[i]:
-                                st.image(img, caption=f"Image {i+1}")
-                                create_download_button(img, f"image_{i+1}", f"download_{i}")
-                    
-                    # Update session state
-                    st.session_state.total_cost += cost
-                    st.session_state.generation_history.append({
-                        "prompt": prompt,
-                        "style": style,
-                        "variants": len(images),
-                        "cost": cost,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
+                st.success("✅ Image generated successfully!")
+                st.image(image, use_column_width=True)
+                
+                # Download button
+                buf = io.BytesIO()
+                image.save(buf, format='PNG')
+                st.download_button(
+                    "📥 Download Image",
+                    buf.getvalue(),
+                    "generated_image.png",
+                    "image/png"
+                )
                 
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
     
     with col2:
         st.subheader("🚀 Quick Templates")
+        for i, template in enumerate(QUICK_TEMPLATES):
+            if st.button(template[:30] + "...", key=f"template_{i}"):
+                st.session_state.selected_template = template
+                st.rerun()
         
-        for category, templates in QUICK_TEMPLATES.items():
-            with st.expander(f"📁 {category}"):
-                for i, template in enumerate(templates):
-                    if st.button(f"{template[:40]}...", key=f"template_{category}_{i}"):
-                        st.session_state.template_selected = template
-                        st.rerun()
-        
-        # Apply selected template
-        if hasattr(st.session_state, 'template_selected'):
-            prompt = st.session_state.template_selected
-            del st.session_state.template_selected
+        # Apply template
+        if "selected_template" in st.session_state:
+            prompt = st.session_state.selected_template
+            del st.session_state.selected_template
 
 if __name__ == "__main__":
     main()
