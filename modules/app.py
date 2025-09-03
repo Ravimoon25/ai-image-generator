@@ -1,17 +1,18 @@
-"""AI Image Generator - Enhanced Version (Stability AI API v2beta)"""
+"""
+AI Image Generator - Fixed + Enhanced
+- Supports: Generate, Transform, Upscale
+- Stability AI API v1 endpoints
+"""
 
 import streamlit as st
 import requests
 from PIL import Image
 import io
+import base64
 from datetime import datetime
 from typing import List
-from concurrent.futures import ThreadPoolExecutor
-import base64
 
-# ------------------------
 # Page configuration
-# ------------------------
 st.set_page_config(
     page_title="AI Image Generator",
     page_icon="🎨",
@@ -19,9 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ------------------------
 # Custom CSS
-# ------------------------
 st.markdown("""
 <style>
 .stButton > button {
@@ -30,19 +29,10 @@ st.markdown("""
     border-radius: 8px;
     transition: all 0.3s ease;
 }
-.template-item {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    padding: 0.8rem;
-    border-radius: 6px;
-    margin: 0.3rem 0;
-}
 </style>
 """, unsafe_allow_html=True)
 
-# ------------------------
 # Configuration
-# ------------------------
 STYLE_PRESETS = {
     "None": "",
     "Photorealistic": "ultra-realistic, high-definition, professional photography, sharp details",
@@ -55,74 +45,59 @@ STYLE_PRESETS = {
 }
 
 ASPECT_RATIOS = {
-    "Square (1:1)": "1:1",
-    "Portrait (9:16)": "9:16",
-    "Landscape (16:9)": "16:9",
-    "Wide (21:9)": "21:9"
+    "Square (1:1)": "1024x1024",
+    "Portrait (9:16)": "1024x1792", 
+    "Landscape (16:9)": "1792x1024",
 }
 
-# ------------------------
-# Helpers
-# ------------------------
-def get_api_key():
+# --- API Helpers ---
+def generate_images(prompt: str, style: str, aspect_ratio: str, num_variants: int = 1) -> List[Image.Image]:
     api_key = st.secrets.get("STABILITY_API_KEY", "")
     if not api_key:
-        st.error("Please add STABILITY_API_KEY to Streamlit secrets")
-        st.stop()
-    return api_key
+        raise ValueError("API key not configured")
 
+    api_host = "https://api.stability.ai"
+    engine_id = "stable-diffusion-xl-1024-v1-0"
 
-def enhance_prompt(prompt: str, style: str) -> str:
+    enhanced_prompt = prompt
     if style != "None" and style in STYLE_PRESETS:
-        prompt = f"{prompt}, {STYLE_PRESETS[style]}"
-    return f"{prompt}, high quality, detailed, professional, sharp focus"
-
-
-# ------------------------
-# API Calls
-# ------------------------
-def generate_images(prompt: str, style: str, aspect_ratio: str, num_variants: int) -> List[Image.Image]:
-    api_key = get_api_key()
-    enhanced_prompt = enhance_prompt(prompt, style)
+        enhanced_prompt = f"{prompt}, {STYLE_PRESETS[style]}"
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Accept": "image/*"
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}"
     }
 
-    data = {
-        "prompt": enhanced_prompt,
-        "aspect_ratio": ASPECT_RATIOS[aspect_ratio],
-        "output_format": "png"
-    }
-
-    def _request():
-        resp = requests.post(
-            "https://api.stability.ai/v2beta/stable-image/generate/core",
+    images = []
+    for _ in range(num_variants):
+        response = requests.post(
+            f"{api_host}/v1/generation/{engine_id}/text-to-image",
             headers=headers,
-            files={"none": ""},
-            data=data,
+            json={
+                "text_prompts": [{"text": enhanced_prompt}],
+                "cfg_scale": 7,
+                "height": int(aspect_ratio.split("x")[1]),
+                "width": int(aspect_ratio.split("x")[0]),
+                "samples": 1,
+                "steps": 30,
+            },
             timeout=60
         )
-        if resp.status_code == 200:
-            return Image.open(io.BytesIO(resp.content))
-        else:
-            raise Exception(resp.text)
+        if response.status_code != 200:
+            raise Exception(f"Generation failed: {response.text}")
 
-    # Run in parallel
-    with ThreadPoolExecutor() as executor:
-        results = list(executor.map(lambda _: _request(), range(num_variants)))
-    return results
+        data = response.json()
+        for artifact in data.get("artifacts", []):
+            img_data = base64.b64decode(artifact["base64"])
+            images.append(Image.open(io.BytesIO(img_data)))
+
+    return images
 
 
-def transform_image(prompt, image: Image.Image, strength=0.8, steps=30, cfg_scale=7, samples=1):
-    """
-    Transform an image using Stability AI Image-to-Image API
-    """
+def transform_image(prompt: str, image: Image.Image, strength=0.8, steps=30, cfg_scale=7, samples=1) -> List[Image.Image]:
     api_key = st.secrets.get("STABILITY_API_KEY", "")
     if not api_key:
-        st.error("Missing Stability API key. Please add it to Streamlit secrets.")
-        return []
+        raise ValueError("API key not configured")
 
     api_host = "https://api.stability.ai"
     engine_id = "stable-diffusion-xl-1024-v1-0"
@@ -132,12 +107,6 @@ def transform_image(prompt, image: Image.Image, strength=0.8, steps=30, cfg_scal
         "Authorization": f"Bearer {api_key}"
     }
 
-    # ✅ Ensure it's really a PIL Image
-    if not isinstance(image, Image.Image):
-        st.error("Uploaded image could not be processed. Please upload a valid PNG/JPG.")
-        return []
-
-    # Convert PIL image into a buffer
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     buffered.seek(0)
@@ -146,7 +115,7 @@ def transform_image(prompt, image: Image.Image, strength=0.8, steps=30, cfg_scal
         f"{api_host}/v1/generation/{engine_id}/image-to-image",
         headers=headers,
         files={
-            "init_image": buffered
+            "init_image": ("init.png", buffered, "image/png")
         },
         data={
             "image_strength": strength,
@@ -160,8 +129,7 @@ def transform_image(prompt, image: Image.Image, strength=0.8, steps=30, cfg_scal
     )
 
     if response.status_code != 200:
-        st.error(f"❌ Transformation failed: {response.text}")
-        return []
+        raise Exception(f"Transformation failed: {response.text}")
 
     data = response.json()
     images = []
@@ -172,234 +140,119 @@ def transform_image(prompt, image: Image.Image, strength=0.8, steps=30, cfg_scal
     return images
 
 
-def transformation_tab():
-    st.subheader("🔄 Image Transformation")
+def upscale_image(image: Image.Image) -> Image.Image:
+    api_key = st.secrets.get("STABILITY_API_KEY", "")
+    if not api_key:
+        raise ValueError("API key not configured")
 
-    uploaded_file = st.file_uploader("📤 Upload an image", type=["png", "jpg", "jpeg"])
-
-    if uploaded_file:
-        # ✅ Always convert file to PIL Image
-        try:
-            image = Image.open(uploaded_file).convert("RGB")
-        except Exception:
-            st.error("Could not read uploaded file as image.")
-            return
-
-        st.image(image, caption="Original Image", use_container_width=True)
-
-        prompt = st.text_area("✏️ Transformation Prompt", placeholder="Describe the transformation...")
-        strength = st.slider("🎚️ Strength", 0.1, 1.0, 0.8)
-
-        if st.button("⚡ Transform Image", type="primary", disabled=not prompt):
-            with st.spinner("Transforming..."):
-                results = transform_image(prompt, image, strength=strength)
-                for i, img in enumerate(results):
-                    st.image(img, caption=f"Transformed Variant {i+1}", use_container_width=True)
-
-                    buf = io.BytesIO()
-                    img.save(buf, format="PNG")
-                    st.download_button(
-                        f"📥 Download Variant {i+1}",
-                        buf.getvalue(),
-                        f"transformed_{i+1}.png",
-                        "image/png"
-                    )
-
-def upscale_image(uploaded_image: Image.Image) -> Image.Image:
-    api_key = get_api_key()
-
-    img_byte_arr = io.BytesIO()
-    uploaded_image.save(img_byte_arr, format='PNG')
-    img_byte_arr.seek(0)
+    api_host = "https://api.stability.ai"
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Accept": "image/*"
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}"
     }
 
-    files = {"image": ("image.png", img_byte_arr, "image/png")}
-    data = {"output_format": "png"}
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    buffered.seek(0)
 
     response = requests.post(
-        "https://api.stability.ai/v2beta/stable-image/upscale/conservative",
+        f"{api_host}/v1/generation/esrgan-v1-x2plus/image-to-image",
         headers=headers,
-        files=files,
-        data=data,
+        files={
+            "init_image": ("image.png", buffered, "image/png")
+        },
+        data={
+            "text_prompts[0][text]": "upscale",
+            "cfg_scale": 7,
+            "samples": 1,
+            "steps": 50,
+        },
         timeout=90
     )
 
-    if response.status_code == 200:
-        return Image.open(io.BytesIO(response.content))
-    else:
-        raise Exception(response.text)
+    if response.status_code != 200:
+        raise Exception(f"Upscale failed: {response.text}")
+
+    data = response.json()
+    artifact = data["artifacts"][0]
+    img_data = base64.b64decode(artifact["base64"])
+    return Image.open(io.BytesIO(img_data))
 
 
-# ------------------------
-# Session State
-# ------------------------
-def initialize_session_state():
-    if 'generation_history' not in st.session_state:
-        st.session_state.generation_history = []
-    if 'selected_prompt' not in st.session_state:
-        st.session_state.selected_prompt = ""
-
-
-def save_to_history(prompt, style):
-    history_item = {
-        'prompt': prompt,
-        'style': style,
-        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    st.session_state.generation_history.insert(0, history_item)
-    if len(st.session_state.generation_history) > 20:
-        st.session_state.generation_history.pop()
-
-
-# ------------------------
-# Main App
-# ------------------------
+# --- Streamlit UI ---
 def main():
-    initialize_session_state()
-
     st.title("🎨 AI Image Generator")
     st.markdown("**Professional image generation powered by Stability AI**")
 
-    # Sidebar
-    with st.sidebar:
-        st.header("📊 Dashboard")
-        get_api_key()  # ensures key is set
-        st.success("✅ Stability AI Connected")
+    if not st.secrets.get("STABILITY_API_KEY"):
+        st.error("Please add STABILITY_API_KEY to secrets")
+        st.stop()
 
-        st.metric("Images Created", len(st.session_state.generation_history))
-
-        if st.button("🗑️ Clear History"):
-            st.session_state.generation_history = []
-            st.success("History cleared!")
-
-        if st.session_state.generation_history:
-            st.subheader("📚 Recent Generations")
-            for i, item in enumerate(st.session_state.generation_history[:5]):
-                with st.expander(f"🎨 {item['timestamp'][:10]}"):
-                    st.write(f"**Prompt:** {item['prompt'][:50]}...")
-                    st.write(f"**Style:** {item['style']}")
-                    if st.button("🔄 Use Again", key=f"reuse_{i}"):
-                        st.session_state.selected_prompt = item['prompt']
-                        st.rerun()
-
-    # Tabs
     tab1, tab2, tab3 = st.tabs(["🎨 Generate", "🔄 Transform", "⬆️ Upscale"])
 
-    # ------------------------
-    # Tab 1: Generate
-    # ------------------------
+    # --- Generate ---
     with tab1:
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            prompt_value = st.session_state.selected_prompt or ""
-            st.session_state.selected_prompt = ""
+        prompt = st.text_area("✨ Describe your image:", height=120)
+        style = st.selectbox("Art Style:", list(STYLE_PRESETS.keys()))
+        aspect_ratio = st.selectbox("Aspect Ratio:", list(ASPECT_RATIOS.values()))
+        num_variants = st.slider("Number of Images", 1, 4, 1)
 
-            prompt = st.text_area(
-                "✨ Describe your image:",
-                value=prompt_value,
-                height=120,
-                placeholder="Professional headshot of a confident businesswoman in modern office"
-            )
+        if st.button("⚡ Generate Image", type="primary"):
+            try:
+                with st.spinner("Generating..."):
+                    images = generate_images(prompt, style, aspect_ratio, num_variants)
 
-            st.subheader("⚙️ Generation Settings")
-            col1a, col1b = st.columns(2)
-            with col1a:
-                style = st.selectbox("Art Style:", list(STYLE_PRESETS.keys()))
-                num_variants = st.slider("Number of Images:", 1, 4, 2)
-            with col1b:
-                aspect_ratio = st.selectbox("Aspect Ratio:", list(ASPECT_RATIOS.keys()))
-
-            if st.button("🎨 Generate Images", type="primary", disabled=not prompt):
-                try:
-                    with st.spinner("Generating images..."):
-                        images = generate_images(prompt, style, aspect_ratio, num_variants)
-                    save_to_history(prompt, style)
-
-                    cols = st.columns(len(images))
-                    for i, img in enumerate(images):
-                        with cols[i % len(cols)]:
-                            st.image(img, caption=f"Variant {i+1}", use_container_width=True)
-                            buf = io.BytesIO()
-                            img.save(buf, format='PNG')
-                            st.download_button(
-                                f"📥 Download {i+1}",
-                                buf.getvalue(),
-                                f"generated_{i+1}.png",
-                                "image/png"
-                            )
-                except Exception as e:
-                    st.error(f"❌ Generation failed: {str(e)}")
-
-    # ------------------------
-    # Tab 2: Transform
-    # ------------------------
-    with tab2:
-        st.header("🔄 Transform Images")
-        uploaded_file = st.file_uploader("Upload image to transform:", type=['png', 'jpg', 'jpeg'])
-
-        if uploaded_file:
-            uploaded_image = Image.open(uploaded_file)
-            st.image(uploaded_image, caption="Original Image", use_container_width=True)
-
-            transform_prompt = st.text_area("Describe the transformation:", height=100)
-            col2a, col2b = st.columns(2)
-            with col2a:
-                transform_style = st.selectbox("Style:", list(STYLE_PRESETS.keys()))
-            with col2b:
-                strength = st.slider("Transformation Strength:", 0.3, 1.0, 0.7, 0.1)
-
-            if st.button("🔄 Transform Image", type="primary", disabled=not transform_prompt):
-                try:
-                    with st.spinner("Transforming your image..."):
-                        transformed_image = transform_image(uploaded_image, transform_prompt, transform_style, strength)
-                    st.success("✅ Image transformed successfully!")
-
-                    col_before, col_after = st.columns(2)
-                    with col_before:
-                        st.image(uploaded_image, caption="Before", use_container_width=True)
-                    with col_after:
-                        st.image(transformed_image, caption="After", use_container_width=True)
-
+                for i, img in enumerate(images):
+                    st.image(img, caption=f"Variant {i+1}")
                     buf = io.BytesIO()
-                    transformed_image.save(buf, format='PNG')
-                    st.download_button("📥 Download Transformed Image", buf.getvalue(), "transformed.png", "image/png")
+                    img.save(buf, format="PNG")
+                    st.download_button(f"📥 Download Variant {i+1}", buf.getvalue(), f"gen_{i+1}.png", "image/png")
+
+            except Exception as e:
+                st.error(str(e))
+
+    # --- Transform ---
+    with tab2:
+        uploaded_file = st.file_uploader("📤 Upload an image", type=["png", "jpg", "jpeg"])
+        if uploaded_file:
+            uploaded_file.seek(0)
+            image = Image.open(uploaded_file).convert("RGB")
+            st.image(image, caption="Original", use_container_width=True)
+
+            prompt = st.text_area("✏️ Transformation Prompt")
+            strength = st.slider("🎚️ Strength", 0.1, 1.0, 0.8)
+
+            if st.button("🔄 Transform Image", type="primary"):
+                try:
+                    with st.spinner("Transforming..."):
+                        results = transform_image(prompt, image, strength)
+                    for i, img in enumerate(results):
+                        st.image(img, caption=f"Transformed {i+1}")
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        st.download_button(f"📥 Download {i+1}", buf.getvalue(), f"transform_{i+1}.png", "image/png")
                 except Exception as e:
-                    st.error(f"❌ Transformation failed: {str(e)}")
+                    st.error(str(e))
 
-    # ------------------------
-    # Tab 3: Upscale
-    # ------------------------
+    # --- Upscale ---
     with tab3:
-        st.header("⬆️ Upscale Images")
-        upscale_file = st.file_uploader("Upload image to upscale:", type=['png', 'jpg', 'jpeg'], key="upscale_upload")
-
-        if upscale_file:
-            upscale_input = Image.open(upscale_file)
-            original_size = upscale_input.size
-            st.image(upscale_input, caption=f"Original ({original_size[0]}x{original_size[1]})", use_container_width=True)
+        up_file = st.file_uploader("📤 Upload an image to upscale", type=["png", "jpg", "jpeg"])
+        if up_file:
+            up_file.seek(0)
+            image = Image.open(up_file).convert("RGB")
+            st.image(image, caption="Original", use_container_width=True)
 
             if st.button("⬆️ Upscale Image", type="primary"):
                 try:
-                    with st.spinner("Upscaling your image..."):
-                        upscaled_result = upscale_image(upscale_input)
-                    new_size = upscaled_result.size
-                    st.success(f"✅ Upscaled to {new_size[0]}x{new_size[1]}")
-
-                    col_orig, col_up = st.columns(2)
-                    with col_orig:
-                        st.image(upscale_input, caption="Original", use_container_width=True)
-                    with col_up:
-                        st.image(upscaled_result, caption="Upscaled", use_container_width=True)
-
+                    with st.spinner("Upscaling..."):
+                        upscaled = upscale_image(image)
+                    st.image(upscaled, caption="Upscaled")
                     buf = io.BytesIO()
-                    upscaled_result.save(buf, format='PNG')
-                    st.download_button("📥 Download Upscaled Image", buf.getvalue(), "upscaled.png", "image/png")
+                    upscaled.save(buf, format="PNG")
+                    st.download_button("📥 Download Upscaled", buf.getvalue(), "upscaled.png", "image/png")
                 except Exception as e:
-                    st.error(f"❌ Upscaling failed: {str(e)}")
+                    st.error(str(e))
 
 
 if __name__ == "__main__":
