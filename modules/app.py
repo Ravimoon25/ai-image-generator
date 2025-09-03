@@ -156,7 +156,7 @@ def transform_image(uploaded_image: Image.Image, prompt: str, style: str, streng
     }
     
     response = requests.post(
-        "https://api.stability.ai/v2beta/stable-image/generate/image-to-image",
+        "https://api.stability.ai/v2beta/stable-image/core/image-to-image",
         headers=headers,
         files=files,
         data=data,
