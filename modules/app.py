@@ -7,6 +7,7 @@ import io
 from datetime import datetime
 from typing import List
 from concurrent.futures import ThreadPoolExecutor
+import base64
 
 # ------------------------
 # Page configuration
@@ -116,7 +117,7 @@ def generate_images(prompt: str, style: str, aspect_ratio: str, num_variants: in
 
 def transform_image(prompt, image, strength=0.8, steps=30, cfg_scale=7, samples=1):
     """
-    Transform an image using Stability AI Image-to-Image API
+    Transform an uploaded image using Stability AI Image-to-Image API
     """
     api_key = st.secrets.get("STABILITY_API_KEY", "")
     if not api_key:
@@ -124,17 +125,19 @@ def transform_image(prompt, image, strength=0.8, steps=30, cfg_scale=7, samples=
         return []
 
     api_host = "https://api.stability.ai"
-    engine_id = "stable-diffusion-xl-1024-v1-0"  # you can change engine here
+    engine_id = "stable-diffusion-xl-1024-v1-0"  # you can switch to another engine
 
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
 
+    # Convert to PNG buffer
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     buffered.seek(0)
 
+    # API request
     response = requests.post(
         f"{api_host}/v1/generation/{engine_id}/image-to-image",
         headers=headers,
@@ -164,6 +167,37 @@ def transform_image(prompt, image, strength=0.8, steps=30, cfg_scale=7, samples=
 
     return images
 
+
+# -------------------------------
+# 🔹 Streamlit Transformation Tab
+# -------------------------------
+def transformation_tab():
+    st.subheader("🔄 Image Transformation")
+
+    uploaded_file = st.file_uploader("📤 Upload an image", type=["png", "jpg", "jpeg"])
+
+    if uploaded_file:
+        # ✅ Convert uploaded file into PIL Image
+        image = Image.open(uploaded_file).convert("RGB")
+        st.image(image, caption="Original Image", use_container_width=True)
+
+        prompt = st.text_area("✏️ Transformation Prompt", placeholder="Describe how to transform your image...")
+        strength = st.slider("🎚️ Strength", 0.1, 1.0, 0.8)
+
+        if st.button("⚡ Transform Image", type="primary", disabled=not prompt):
+            with st.spinner("Transforming..."):
+                results = transform_image(prompt, image, strength=strength)
+                for i, img in enumerate(results):
+                    st.image(img, caption=f"Transformed Variant {i+1}", use_container_width=True)
+
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    st.download_button(
+                        f"📥 Download Variant {i+1}",
+                        buf.getvalue(),
+                        f"transformed_{i+1}.png",
+                        "image/png"
+                    )
 
 
 def upscale_image(uploaded_image: Image.Image) -> Image.Image:
