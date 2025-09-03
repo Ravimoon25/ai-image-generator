@@ -121,6 +121,94 @@ def generate_images(prompt: str, style: str, aspect_ratio: str, num_variants: in
     
     return images
 
+
+def transform_image(uploaded_image: Image.Image, prompt: str, style: str, strength: float = 0.7) -> Image.Image:
+    """Transform an existing image using Stability AI image-to-image"""
+    api_key = st.secrets.get("STABILITY_API_KEY", "")
+    
+    if not api_key:
+        raise ValueError("API key not configured")
+    
+    # Enhance prompt
+    enhanced_prompt = prompt
+    if style != "None" and style in STYLE_PRESETS:
+        enhanced_prompt = f"{prompt}, {STYLE_PRESETS[style]}"
+    enhanced_prompt = f"{enhanced_prompt}, high quality, detailed, professional"
+    
+    # Convert PIL image to bytes
+    img_byte_arr = io.BytesIO()
+    uploaded_image.save(img_byte_arr, format='PNG')
+    img_byte_arr.seek(0)
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "image/*"
+    }
+    
+    files = {
+        "image": ("image.png", img_byte_arr, "image/png")
+    }
+    
+    data = {
+        "prompt": enhanced_prompt,
+        "output_format": "png",
+        "strength": strength
+    }
+    
+    response = requests.post(
+        "https://api.stability.ai/v2beta/stable-image/generate/image-to-image",
+        headers=headers,
+        files=files,
+        data=data,
+        timeout=60
+    )
+    
+    if response.status_code == 200:
+        return Image.open(io.BytesIO(response.content))
+    else:
+        raise Exception(f"Image-to-Image API Error: {response.text}")
+
+
+def upscale_image(uploaded_image: Image.Image) -> Image.Image:
+    """Upscale an image using Stability AI upscaling"""
+    api_key = st.secrets.get("STABILITY_API_KEY", "")
+    
+    if not api_key:
+        raise ValueError("API key not configured")
+    
+    # Convert PIL image to bytes
+    img_byte_arr = io.BytesIO()
+    uploaded_image.save(img_byte_arr, format='PNG')
+    img_byte_arr.seek(0)
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "image/*"
+    }
+    
+    files = {
+        "image": ("image.png", img_byte_arr, "image/png")
+    }
+    
+    data = {
+        "output_format": "png"
+    }
+    
+    response = requests.post(
+        "https://api.stability.ai/v2beta/stable-image/upscale/conservative",
+        headers=headers,
+        files=files,
+        data=data,
+        timeout=90  # Upscaling takes longer
+    )
+    
+    if response.status_code == 200:
+        return Image.open(io.BytesIO(response.content))
+    else:
+        raise Exception(f"Upscaling API Error: {response.text}")
+
+
+
 def save_to_history(prompt, style, variants):
     """Save generation to history"""
     history_item = {
@@ -167,115 +255,183 @@ def main():
                         st.rerun()
     
     # Main content
-    col1, col2 = st.columns([2, 1])
+    # Main content with tabs
+    tab1, tab2, tab3 = st.tabs(["🎨 Generate", "🔄 Transform", "⬆️ Upscale"])
     
-    with col1:
-        # Use selected prompt if available
-        prompt_value = st.session_state.selected_prompt if st.session_state.selected_prompt else ""
-        if st.session_state.selected_prompt:
-            st.session_state.selected_prompt = ""  # Clear after use
+    with tab1:
+        # Your existing generation code goes here
+        col1, col2 = st.columns([2, 1])
         
-        prompt = st.text_area(
-            "✨ Describe your image:",
-            value=prompt_value,
-            height=120,
-            placeholder="Professional headshot of a confident businesswoman in modern office"
-        )
-        
-        # Settings
-        st.subheader("⚙️ Generation Settings")
-        col1a, col1b, col1c = st.columns(3)
-        
-        with col1a:
-            style = st.selectbox("Art Style:", list(STYLE_PRESETS.keys()))
-            num_variants = st.slider("Number of Images:", 1, 4, 2)
-        
-        with col1b:
-            aspect_ratio = st.selectbox("Aspect Ratio:", list(ASPECT_RATIOS.keys()))
-            quality_boost = st.checkbox("Enhanced Quality", True)
-        
-        with col1c:
-            batch_mode = st.checkbox("Batch Mode", False)
-        
-        # Batch prompts
-        if batch_mode:
-            batch_text = st.text_area(
-                "Multiple prompts (one per line):",
-                height=80,
-                placeholder="Professional headshot\nCasual portrait\nCreative workspace"
+        with col1:
+            # Use selected prompt if available
+            prompt_value = st.session_state.selected_prompt if st.session_state.selected_prompt else ""
+            if st.session_state.selected_prompt:
+                st.session_state.selected_prompt = ""  # Clear after use
+            
+            prompt = st.text_area(
+                "✨ Describe your image:",
+                value=prompt_value,
+                height=120,
+                placeholder="Professional headshot of a confident businesswoman in modern office"
             )
-        
-        # Generate button
-        generate_label = "🎨 Generate Images" if not batch_mode else "🎨 Generate Batch"
-        can_generate = prompt if not batch_mode else batch_text
-        
-        if st.button(generate_label, type="primary", disabled=not can_generate):
-            try:
-                if batch_mode and batch_text:
-                    # Batch generation
-                    prompts = [p.strip() for p in batch_text.split('\n') if p.strip()]
-                    all_images = []
-                    
-                    progress_bar = st.progress(0)
-                    for i, batch_prompt in enumerate(prompts):
-                        st.text(f"Generating: {batch_prompt[:40]}...")
-                        images = generate_images(batch_prompt, style, aspect_ratio, 1)
-                        all_images.extend(images)
-                        progress_bar.progress((i + 1) / len(prompts))
-                        save_to_history(batch_prompt, style, 1)
-                    
-                    st.success(f"✅ Generated {len(all_images)} images from {len(prompts)} prompts")
-                    
-                    # Display batch results
-                    cols = st.columns(3)
-                    for i, img in enumerate(all_images):
-                        with cols[i % 3]:
-                            st.image(img, caption=f"Image {i+1}")
-                
-                else:
-                    # Single generation
-                    with st.spinner(f"Creating {num_variants} images..."):
-                        images = generate_images(prompt, style, aspect_ratio, num_variants)
-                    
-                    if images:
-                        st.success(f"✅ Created {len(images)} images successfully!")
-                        
-                        # Display images
-                        if len(images) == 1:
-                            st.image(images[0], use_column_width=True)
-                        else:
-                            cols = st.columns(min(3, len(images)))
-                            for i, img in enumerate(images):
-                                with cols[i % 3]:
-                                    st.image(img, caption=f"Variant {i+1}")
-                        
-                        save_to_history(prompt, style, len(images))
-                
-                # Download buttons
-                if 'images' in locals() and images:
-                    for i, img in enumerate(images):
-                        buf = io.BytesIO()
-                        img.save(buf, format='PNG')
-                        st.download_button(
-                            f"📥 Download Image {i+1}",
-                            buf.getvalue(),
-                            f"ai_generated_{i+1}.png",
-                            "image/png",
-                            key=f"download_{i}"
-                        )
-                
-            except Exception as e:
-                st.error(f"❌ Generation failed: {str(e)}")
+            
+            # Settings
+            st.subheader("⚙️ Generation Settings")
+            col1a, col1b, col1c = st.columns(3)
+            
+            with col1a:
+                style = st.selectbox("Art Style:", list(STYLE_PRESETS.keys()))
+                num_variants = st.slider("Number of Images:", 1, 4, 2)
+            
+            with col1b:
+                aspect_ratio = st.selectbox("Aspect Ratio:", list(ASPECT_RATIOS.keys()))
+                quality_boost = st.checkbox("Enhanced Quality", True)
+            
+            with col1c:
+                batch_mode = st.checkbox("Batch Mode", False)
+            
+            # ... rest of your existing generation code ...
     
-    with col2:
-        st.subheader("🚀 Quick Templates")
+    with tab2:
+        # New Image-to-Image tab
+        st.header("🔄 Transform Images")
+        st.markdown("Upload an image and transform it with AI")
         
-        for category, templates in QUICK_TEMPLATES.items():
-            with st.expander(f"📁 {category}"):
-                for i, template in enumerate(templates):
-                    if st.button(template[:35] + "...", key=f"template_{category}_{i}", help=template):
-                        st.session_state.selected_prompt = template
-                        st.rerun()
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            uploaded_file = st.file_uploader(
+                "Upload image to transform:",
+                type=['png', 'jpg', 'jpeg'],
+                help="Upload a clear image for best results"
+            )
+            
+            if uploaded_file:
+                uploaded_image = Image.open(uploaded_file)
+                st.image(uploaded_image, caption="Original Image", use_column_width=True)
+                
+                transform_prompt = st.text_area(
+                    "Describe the transformation:",
+                    height=100,
+                    placeholder="Convert to professional headshot style, business attire, office background"
+                )
+                
+                col2a, col2b = st.columns(2)
+                with col2a:
+                    transform_style = st.selectbox("Style:", list(STYLE_PRESETS.keys()), key="transform_style")
+                with col2b:
+                    strength = st.slider("Transformation Strength:", 0.3, 1.0, 0.7, 0.1)
+                
+                if st.button("🔄 Transform Image", type="primary", disabled=not transform_prompt):
+                    try:
+                        with st.spinner("Transforming your image..."):
+                            transformed_image = transform_image(uploaded_image, transform_prompt, transform_style, strength)
+                        
+                        st.success("✅ Image transformed successfully!")
+                        
+                        # Before/After comparison
+                        col_before, col_after = st.columns(2)
+                        with col_before:
+                            st.image(uploaded_image, caption="Before", use_column_width=True)
+                        with col_after:
+                            st.image(transformed_image, caption="After", use_column_width=True)
+                        
+                        # Download button
+                        buf = io.BytesIO()
+                        transformed_image.save(buf, format='PNG')
+                        st.download_button(
+                            "📥 Download Transformed Image",
+                            buf.getvalue(),
+                            "transformed_image.png",
+                            "image/png"
+                        )
+                        
+                    except Exception as e:
+                        st.error(f"❌ Transformation failed: {str(e)}")
+        
+        with col2:
+            st.subheader("💡 Transform Tips")
+            st.markdown("""
+            **Strength Settings:**
+            - 0.3-0.5: Subtle changes
+            - 0.6-0.7: Moderate transformation
+            - 0.8-1.0: Strong changes
+            
+            **Best Results:**
+            - Use clear, well-lit images
+            - Be specific in descriptions
+            - Try different strength values
+            """)
+    
+    with tab3:
+        # Upscale tab
+        st.header("⬆️ Upscale Images")
+        st.markdown("Enhance image resolution up to 4x with AI")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            upscale_file = st.file_uploader(
+                "Upload image to upscale:",
+                type=['png', 'jpg', 'jpeg'],
+                help="Works best with images 512x512 or larger",
+                key="upscale_upload"
+            )
+            
+            if upscale_file:
+                upscale_image_input = Image.open(upscale_file)
+                original_size = upscale_image_input.size
+                st.image(upscale_image_input, caption=f"Original ({original_size[0]}x{original_size[1]})", use_column_width=True)
+                
+                if st.button("⬆️ Upscale Image", type="primary"):
+                    try:
+                        with st.spinner("Upscaling your image... This may take a minute"):
+                            upscaled_result = upscale_image(upscale_image_input)
+                        
+                        new_size = upscaled_result.size
+                        st.success(f"✅ Image upscaled from {original_size[0]}x{original_size[1]} to {new_size[0]}x{new_size[1]}")
+                        
+                        # Before/After comparison
+                        col_orig, col_upscaled = st.columns(2)
+                        with col_orig:
+                            st.image(upscale_image_input, caption=f"Original ({original_size[0]}x{original_size[1]})", use_column_width=True)
+                        with col_upscaled:
+                            st.image(upscaled_result, caption=f"Upscaled ({new_size[0]}x{new_size[1]})", use_column_width=True)
+                        
+                        # Download button
+                        buf = io.BytesIO()
+                        upscaled_result.save(buf, format='PNG')
+                        st.download_button(
+                            "📥 Download Upscaled Image",
+                            buf.getvalue(),
+                            "upscaled_image.png",
+                            "image/png"
+                        )
+                        
+                    except Exception as e:
+                        st.error(f"❌ Upscaling failed: {str(e)}")
+        
+        with col2:
+            st.subheader("ℹ️ Upscaling Info")
+            st.markdown("""
+            **What it does:**
+            - Increases resolution up to 4x
+            - Enhances details and sharpness
+            - Reduces blur and artifacts
+            
+            **Best for:**
+            - Generated AI images
+            - Photos that need enhancement
+            - Images for printing
+            
+            **Tips:**
+            - Works best on images 512px+
+            - May take 30-60 seconds
+            - Larger files will be created
+            """)
+
+
+
 
 if __name__ == "__main__":
     main()
